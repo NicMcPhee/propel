@@ -1,4 +1,7 @@
 (ns propel.core
+  (:require [clojure.test.check :as tc]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop])
   (:gen-class))
 
 (def example-push-state
@@ -20,28 +23,36 @@
    'integer_=
    'exec_dup
    'exec_if
-   'boolean_and
-   'boolean_or
-   'boolean_not
-   'boolean_=
-   'string_=
-   'string_take
-   'string_drop
-   'string_reverse
-   'string_concat
-   'string_length
-   'string_includes?
+  ;  'boolean_and
+  ;  'boolean_or
+  ;  'boolean_not
+  ;  'boolean_=
+  ;  'string_=
+  ;  'string_take
+  ;  'string_drop
+  ;  'string_reverse
+  ;  'string_concat
+  ;  'string_length
+  ;  'string_includes?
    'close
    0
    1
-   true
-   false
-   ""
-   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-   "A"
-   "C"
-   "G"
-   "T"))
+   -1
+   2
+   -2
+   3
+   -3
+   4
+   -4
+  ;  true
+  ;  false
+  ;  ""
+  ;  "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  ;  "A"
+  ;  "C"
+  ;  "G"
+  ;  "T"
+   ))
 
 (def opens ; number of blocks opened by instructions (default = 0)
   {'exec_dup 1
@@ -377,40 +388,42 @@
 
 (defn report
   "Reports information each generation."
-  [pop generation]
+  [pop inputs generation]
   (let [best (first pop)]
     (println "-------------------------------------------------------")
     (println "               Report for Generation" generation)
     (println "-------------------------------------------------------")
     (print "Best plushy: ") (prn (:plushy best))
     (print "Best program: ") (prn (push-from-plushy (:plushy best)))
+    (println "Current inputs: " inputs)
     (println "Best total error:" (:total-error best))
     (println "Best errors:" (:errors best))
     (println "Best behaviors:" (:behaviors best))
     (println)))
 
-(defn propel-gp
-  "Main GP loop."
-  [{:keys [population-size max-generations error-function instructions
-           max-initial-plushy-size]
-    :as argmap}]
-  (println "Starting GP with args:" argmap)
-  (loop [generation 0
-         population (repeatedly
-                     population-size
-                     #(hash-map :plushy
-                                (make-random-plushy instructions
-                                                    max-initial-plushy-size)))]
-    (let [evaluated-pop (sort-by :total-error
-                                 (map (partial error-function argmap)
-                                      population))]
-      (report evaluated-pop generation)
-      (cond
-        (zero? (:total-error (first evaluated-pop))) (println "SUCCESS")
-        (>= generation max-generations) nil
-        :else (recur (inc generation)
-                     (repeatedly population-size 
-                                 #(new-individual evaluated-pop argmap)))))))
+(defn solves-target-function
+  [target-function program argmap]
+  (prop/for-all [i gen/small-integer]
+                (let [result-state (interpret-program
+                                    program
+                                    (assoc empty-push-state :input {:in1 i})
+                                    (:step-limit argmap))
+                      result (peek-stack result-state :integer)]
+                  ; (println "Trying new input")
+                  ; (println i)
+                  ; (println result-state)
+                  ; (println result)
+                  ; (println (target-function-hard i))
+                (and (not= result :no-stack-item)
+                     (= (target-function i)
+                        result)))))
+
+(defn target-function
+  "Target function: f(x) = x^3 + x + 3"
+  [x]
+  (+ (* x x x)
+     x
+     3))
 
 ;;;;;;;;;
 ;; Problem: f(x) = 7x^2 - 20x + 13
@@ -422,19 +435,59 @@
      (* -20 x)
      13))
 
-(defn target-function
-  "Target function: f(x) = x^3 + x + 3"
-  [x]
-  (+ (* x x x)
-     x
-     3))
+(defn generate-new-test-case
+  [winning-individual {:keys [inputs]
+                       :as argmap}]
+  (let [quick-check-result (tc/quick-check
+                            100
+                            (solves-target-function 
+                             target-function-hard 
+                             (push-from-plushy (:plushy winning-individual))
+                             argmap))]
+    ; (println quick-check-result)
+    (if (:pass? quick-check-result)
+      nil
+      (first (:smallest (:shrunk quick-check-result)))
+    )))
+
+(defn propel-gp
+  "Main GP loop."
+  [{:keys [population-size max-generations error-function instructions
+           max-initial-plushy-size]
+    :as argmap}]
+  (println "Starting GP with args:" argmap)
+  (loop [generation 0
+         inputs (:inputs argmap)
+         population (repeatedly
+                     population-size
+                     #(hash-map :plushy
+                                (make-random-plushy instructions
+                                                    max-initial-plushy-size)))]
+    (let [evaluated-pop (sort-by :total-error
+                                 (map (partial error-function (assoc argmap :inputs inputs))
+                                      population))]
+      (report evaluated-pop inputs generation)
+      (cond
+        (zero? (:total-error (first evaluated-pop)))
+          (let [new-test-case (generate-new-test-case (first evaluated-pop) argmap)]
+            (println "New test case is " new-test-case)
+            (if new-test-case
+              (recur (inc generation)
+                    (conj inputs new-test-case)
+                    evaluated-pop)
+              (println "SUCCESS")))
+        (>= generation max-generations) nil
+        :else (recur (inc generation)
+                     inputs
+                     (repeatedly population-size
+                                 #(new-individual evaluated-pop argmap)))))))
 
 (defn regression-error-function
   "Finds the behaviors and errors of the individual."
   [argmap individual]
   (let [program (push-from-plushy (:plushy individual))
-        inputs (range -10 11)
-        correct-outputs (map target-function inputs)
+        inputs (:inputs argmap)
+        correct-outputs (map target-function-hard inputs)
         outputs (map (fn [input]
                        (peek-stack
                         (interpret-program
@@ -489,12 +542,13 @@
   [& args]
   (binding [*ns* (the-ns 'propel.core)]
     (propel-gp (update-in (merge {:instructions default-instructions
+                                  :inputs [0]
                                   :error-function regression-error-function
                                   :max-generations 500
                                   :population-size 200
                                   :max-initial-plushy-size 50
                                   :step-limit 100
-                                  :parent-selection :tournament
+                                  :parent-selection :lexicase
                                   :tournament-size 5}
                                  (apply hash-map
                                         (map read-string args)))
