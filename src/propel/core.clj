@@ -449,6 +449,9 @@
           (contains? inputs (first (:smallest (:shrunk quick-check-result)))) (first (:fail quick-check-result))
           :else (first (:smallest (:shrunk quick-check-result))))))
 
+(def gens-to-add-random 100)
+(def gens-to-add-test 20)
+
 (defn propel-gp
   "Main GP loop."
   [{:keys [population-size max-generations error-function instructions
@@ -456,6 +459,8 @@
     :as argmap}]
   (println "Starting GP with args:" argmap)
   (loop [generation 0
+         last-test-update-gen 0
+         last-add-random-gen 0
          inputs (:inputs argmap)
          population (repeatedly
                      population-size
@@ -467,16 +472,35 @@
                                       population))]
       (report evaluated-pop inputs generation)
       (cond
-        (zero? (:total-error (first evaluated-pop)))
-          (let [new-test-case (generate-new-test-case (first evaluated-pop) argmap)]
-            (println "New test case is " new-test-case)
-            (if new-test-case
-              (recur (inc generation)
-                    (conj inputs new-test-case)
-                    evaluated-pop)
-              (println "SUCCESS")))
+        (or (zero? (:total-error (first evaluated-pop)))
+            (>= (- generation last-test-update-gen) gens-to-add-test))
+        (let [new-test-case (generate-new-test-case (first evaluated-pop) inputs argmap)]
+          (println "New test case is " new-test-case)
+          (if new-test-case
+            (recur (inc generation)
+                   generation
+                   generation
+                   (conj inputs new-test-case)
+                   (concat (take (/ population-size 2) evaluated-pop)
+                           (repeatedly (/ population-size 2)
+                                       #(hash-map :plushy
+                                                  (make-random-plushy instructions
+                                                                      max-initial-plushy-size)))))
+            (println "SUCCESS")))
+        (>= (- generation last-add-random-gen) gens-to-add-random)
+        (recur (inc generation)
+               last-test-update-gen
+               generation
+               inputs
+               (concat (take (/ population-size 2) evaluated-pop)
+                       (repeatedly (/ population-size 2)
+                                   #(hash-map :plushy
+                                              (make-random-plushy instructions
+                                                                  max-initial-plushy-size)))))
         (>= generation max-generations) nil
         :else (recur (inc generation)
+                     last-test-update-gen
+                     last-add-random-gen
                      inputs
                      (repeatedly population-size
                                  #(new-individual evaluated-pop argmap)))))))
@@ -541,10 +565,10 @@
   [& args]
   (binding [*ns* (the-ns 'propel.core)]
     (propel-gp (update-in (merge {:instructions default-instructions
-                                  :inputs [0]
+                                  :inputs #{0}
                                   :error-function regression-error-function
-                                  :max-generations 500
-                                  :population-size 200
+                                  :max-generations 1000
+                                  :population-size 1000
                                   :max-initial-plushy-size 50
                                   :step-limit 100
                                   :parent-selection :lexicase
