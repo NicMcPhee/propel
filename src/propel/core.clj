@@ -402,8 +402,8 @@
     (println)))
 
 (defn solves-target-function
-  [target-function program argmap]
-  (prop/for-all [i gen/small-integer]
+  [target-function inputs program argmap]
+  (prop/for-all [i (gen/such-that #(not (contains? inputs %)) (gen/large-integer* {:min -1000 :max 1000}) 100)]
                 (let [result-state (interpret-program
                                     program
                                     (assoc empty-push-state :input {:in1 i})
@@ -436,19 +436,18 @@
      13))
 
 (defn generate-new-test-case
-  [winning-individual {:keys [inputs]
-                       :as argmap}]
+  [winning-individual inputs argmap]
   (let [quick-check-result (tc/quick-check
                             100
                             (solves-target-function 
                              target-function-hard 
+                             inputs
                              (push-from-plushy (:plushy winning-individual))
                              argmap))]
-    ; (println quick-check-result)
-    (if (:pass? quick-check-result)
-      nil
-      (first (:smallest (:shrunk quick-check-result)))
-    )))
+    (println quick-check-result)
+    (cond (:pass? quick-check-result) nil
+          (contains? inputs (first (:smallest (:shrunk quick-check-result)))) (first (:fail quick-check-result))
+          :else (first (:smallest (:shrunk quick-check-result))))))
 
 (defn propel-gp
   "Main GP loop."
