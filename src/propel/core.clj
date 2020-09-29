@@ -454,8 +454,9 @@
 (defn propel-gp
   "Main GP loop."
   [{:keys [population-size max-generations error-function instructions
-           max-initial-plushy-size]
+           max-initial-plushy-size
            gens-to-add-random gens-to-add-test
+           average-error-threshold proportion-zero-error-threshold]
     :as argmap}]
   (println "Starting GP with args:" argmap)
   (loop [generation 0
@@ -472,7 +473,8 @@
                                       population))]
       (report evaluated-pop inputs generation)
       (cond
-        (or (zero? (:total-error (first evaluated-pop)))
+        (or (<= (:total-error (first evaluated-pop)) (* (count inputs) average-error-threshold))
+            (>= (count (filter zero? (:errors (first evaluated-pop)))) (* proportion-zero-error-threshold (count inputs)))
             (>= (- generation last-test-update-gen) gens-to-add-test))
         (let [new-test-case (generate-new-test-case (first evaluated-pop) inputs argmap)]
           (println "New test case is " new-test-case)
@@ -572,9 +574,11 @@
                                   :max-initial-plushy-size 50
                                   :step-limit 100
                                   :parent-selection :lexicase
-                                  :tournament-size 5}
+                                  :tournament-size 5
                                   :gens-to-add-random 100
                                   :gens-to-add-test 100
+                                  :average-error-threshold 5
+                                  :proportion-zero-error-threshold 0.5}
                                  (apply hash-map
                                         (map read-string args)))
                           [:error-function]
