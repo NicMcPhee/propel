@@ -451,13 +451,11 @@
           (contains? inputs (first (:smallest (:shrunk quick-check-result)))) (first (:fail quick-check-result))
           :else (first (:smallest (:shrunk quick-check-result))))))
 
-(def gens-to-add-random 100)
-(def gens-to-add-test 20)
-
 (defn propel-gp
   "Main GP loop."
   [{:keys [population-size max-generations error-function instructions
            max-initial-plushy-size]
+           gens-to-add-random gens-to-add-test
     :as argmap}]
   (println "Starting GP with args:" argmap)
   (loop [generation 0
@@ -575,6 +573,8 @@
                                   :step-limit 100
                                   :parent-selection :lexicase
                                   :tournament-size 5}
+                                  :gens-to-add-random 100
+                                  :gens-to-add-test 100
                                  (apply hash-map
                                         (map read-string args)))
                           [:error-function]
